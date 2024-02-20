@@ -38,53 +38,45 @@ func GinGzipBodies(lvl int) gin.HandlerFunc {
 			c.Writer.Header().Set("Content-Encoding", "gzip")
 			zipwriter := getzipwriter(c.Writer, lvl)
 			defer putzipwriter(zipwriter, lvl)
-			c.Writer = &ginCompatWriter{
-				grw:        c.Writer,
-				realWriter: &compressingWriter{rw: c.Writer, compressor: zipwriter},
-				status:     0,
-			}
+			c.Writer = &ginCompatGzipWriter{c.Writer, gzipWriter{rw: c.Writer, gzipw: zipwriter}}
 			c.Next()
 			return
 		}
 	}
 }
 
-// ginCompatWriter implements all 10 billion methods of gin.ResponseWriter
+// ginCompatGzipWriter implements all 10 billion methods of gin.ResponseWriter
 // in order to write a simple middleware.
 // I _strongly_ dislike gin, but it's what we already use...
-type ginCompatWriter struct {
-	grw        gin.ResponseWriter
-	realWriter http.ResponseWriter
-	status     int
+type ginCompatGzipWriter struct {
+	ginResponseWriter gin.ResponseWriter
+	gzipw             gzipWriter
 }
 
-var _ gin.ResponseWriter = (*ginCompatWriter)(nil)
+var _ gin.ResponseWriter = (*ginCompatGzipWriter)(nil)
 
-func (g *ginCompatWriter) Flush()                                       { g.grw.Flush() }
-func (g *ginCompatWriter) Pusher() http.Pusher                          { return g.grw.Pusher() }
-func (g *ginCompatWriter) Header() http.Header                          { return g.grw.Header() }
-func (g *ginCompatWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) { return g.grw.Hijack() }
-func (g *ginCompatWriter) WriteString(s string) (int, error)            { return g.Write([]byte(s)) }
-func (g *ginCompatWriter) Status() int {
-	if g.status != 0 {
-		return g.status
+func (g *ginCompatGzipWriter) Flush()              { g.ginResponseWriter.Flush() }
+func (g *ginCompatGzipWriter) Pusher() http.Pusher { return g.ginResponseWriter.Pusher() }
+func (g *ginCompatGzipWriter) Header() http.Header { return g.ginResponseWriter.Header() }
+func (g *ginCompatGzipWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return g.ginResponseWriter.Hijack()
+}
+func (g *ginCompatGzipWriter) WriteString(s string) (int, error) { return g.Write([]byte(s)) }
+func (g *ginCompatGzipWriter) Status() int {
+	if g.gzipw.status != 0 {
+		return g.gzipw.status
 	}
-	return g.grw.Status()
+	return g.ginResponseWriter.Status()
 }
 
-func (g *ginCompatWriter) Written() bool { return g.grw.Written() }
-func (g *ginCompatWriter) Write(data []byte) (int, error) {
-	g.WriteHeader(http.StatusOK)
-	return g.realWriter.Write(data)
+func (g *ginCompatGzipWriter) Written() bool { return g.ginResponseWriter.Written() }
+func (g *ginCompatGzipWriter) Write(data []byte) (int, error) {
+	g.gzipw.WriteHeader(http.StatusOK)
+	return g.gzipw.Write(data)
 }
 
-func (g *ginCompatWriter) Size() int { return g.grw.Size() }
-func (g *ginCompatWriter) WriteHeader(code int) {
-	if g.status == 0 {
-		g.status = code
-		g.realWriter.WriteHeader(code)
-	}
-}
+func (g *ginCompatGzipWriter) Size() int            { return g.ginResponseWriter.Size() }
+func (g *ginCompatGzipWriter) WriteHeader(code int) { g.gzipw.WriteHeader(code) }
 
-func (g *ginCompatWriter) WriteHeaderNow()          { g.grw.WriteHeaderNow() }
-func (g *ginCompatWriter) CloseNotify() <-chan bool { return g.grw.CloseNotify() }
+func (g *ginCompatGzipWriter) WriteHeaderNow()          { g.ginResponseWriter.WriteHeaderNow() }
+func (g *ginCompatGzipWriter) CloseNotify() <-chan bool { return g.ginResponseWriter.CloseNotify() }

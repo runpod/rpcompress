@@ -3,14 +3,13 @@ package compressmw
 import (
 	"compress/gzip"
 	"fmt"
-	"io"
 	"net/http"
 )
 
-type compressingWriter struct {
-	compressor io.WriteCloser
-	rw         http.ResponseWriter
-	status     int
+type gzipWriter struct {
+	gzipw  *gzip.Writer        // should wrap rw
+	rw     http.ResponseWriter // the underlying ResponseWriter
+	status int                 // the HTTP response code from the first call to WriteHeader
 }
 
 func checkgziplevel(lvl int) int {
@@ -25,7 +24,7 @@ func checkgziplevel(lvl int) int {
 }
 
 // Write writes the compressed data to the underlying ResponseWriter.
-func (cw *compressingWriter) WriteHeader(code int) {
+func (cw *gzipWriter) WriteHeader(code int) {
 	if cw.status != 0 {
 		return
 	}
@@ -33,13 +32,13 @@ func (cw *compressingWriter) WriteHeader(code int) {
 	cw.rw.WriteHeader(code)
 }
 
-func (cw *compressingWriter) Write(b []byte) (int, error) {
+func (cw *gzipWriter) Write(b []byte) (int, error) {
 	cw.WriteHeader(http.StatusOK)
-	return cw.compressor.Write(b)
+	return cw.gzipw.Write(b)
 }
 
 // Header returns the header map of the underlying ResponseWriter.
-func (cw *compressingWriter) Header() http.Header { return cw.rw.Header() }
+func (cw *gzipWriter) Header() http.Header { return cw.rw.Header() }
 
 // ServerAcceptGzip transparently decompresses incoming requests with a Content-Encoding of "gzip" or "x-gzip".
 // It does not handle "deflate", "br", "zstd", or any other encoding - use separate middleware for those.
@@ -70,12 +69,12 @@ func ServerGzipResponseBody(h http.Handler, lvl int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Accept-Encoding") == "gzip" {
 			w.Header().Set("Content-Encoding", "gzip")
-			gw := getzipwriter(w, lvl)
-			defer putzipwriter(gw, lvl)
-			h.ServeHTTP(&compressingWriter{rw: w, compressor: gw}, r)
+			gzipw := getzipwriter(w, lvl)
+			defer putzipwriter(gzipw, lvl)
+			h.ServeHTTP(&gzipWriter{rw: w, gzipw: gzipw}, r)
 		}
 	}
 }
 
 // Unwrap returns the underlying ResponseWriter.
-func (cw *compressingWriter) Unwrap() http.ResponseWriter { return cw.rw }
+func (cw *gzipWriter) Unwrap() http.ResponseWriter { return cw.rw }

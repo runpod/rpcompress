@@ -4,7 +4,7 @@ rpcompress contains http middleware for clients and servers sending gzip-compres
 
 ## Go:
 
-See [./compressmw] for the middleware. See the [tests](./compressmw/compressmw_test.go) for many examples of the middleware in use.
+See [./compressmw](./compressmw/) for the middleware. See the [tests](./compressmw/compressmw_test.go) for many examples of the middleware in use.
 
 ### Clients:
 - Decompression is automatically implemented by the standard `http.Transport` when the `Accept-Encoding` header is set to `gzip`.

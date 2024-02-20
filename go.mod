@@ -2,10 +2,7 @@ module github.com/runpod/rpcompress
 
 go 1.21.6
 
-require (
-	github.com/gin-gonic/gin v1.9.1
-	github.com/klauspost/compress v1.17.6
-)
+require github.com/gin-gonic/gin v1.9.1
 
 require (
 	github.com/bytedance/sonic v1.9.1 // indirect
