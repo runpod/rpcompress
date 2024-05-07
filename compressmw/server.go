@@ -4,7 +4,28 @@ import (
 	"compress/gzip"
 	"fmt"
 	"net/http"
+	"strings"
 )
+
+// hasGzipAt returns the index of "gzip" or "x-gzip" in headers, or -1 if it's not present.
+// it splits on commas, so it can handle "br, gzip" or "gzip, br".
+// usually called as follows:
+func hasGzipAt(headers []string) int {
+	for i := range headers {
+		if !strings.Contains(headers[i], "gzip") {
+			continue
+		}
+		for _, v := range strings.Split(headers[i], ",") {
+			switch strings.TrimSpace(v) {
+			case "gzip", "x-gzip":
+				return i
+			}
+		}
+		// this should not be reachable, but particularly bad input could cause it.
+		// move on to the next header.
+	}
+	return -1 //
+}
 
 type gzipWriter struct {
 	gzipw  *gzip.Writer        // should wrap rw
@@ -46,13 +67,20 @@ func (cw *gzipWriter) Header() http.Header { return cw.rw.Header() }
 // and ClientCompressBodyWithGzip for compressing outgoing requests to be READ by this middleware.
 func ServerAcceptGzip(h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Encoding") == "gzip" {
-			r.Header.Del("Content-Encoding")
-			defer r.Body.Close()
-			zipreader := getzipreader(r.Body)
-			defer putzipreader(zipreader)
-			r.Body = zipreader
+		i := hasGzipAt(r.Header.Values("Content-Encoding"))
+		if i == -1 { // not gzip-encoded. pass it through.
+			h.ServeHTTP(w, r)
+			return
 		}
+		// remove 'content-encoding: gzip' from the header: we don't want something later down the line to do it again.
+		r.Header["Content-Encoding"] = append(r.Header["Content-Encoding"][:i], r.Header["Content-Encoding"][i+1:]...)
+
+		// replace the request body with a streaming, decompressing reader.
+		defer r.Body.Close()
+		zipreader := getzipreader(r.Body)
+		defer putzipreader(zipreader)
+		r.Body = zipreader
+
 		h.ServeHTTP(w, r)
 	}
 }
@@ -67,12 +95,20 @@ func ServerAcceptGzip(h http.Handler) http.HandlerFunc {
 func ServerGzipResponseBody(h http.Handler, lvl int) http.HandlerFunc {
 	lvl = checkgziplevel(lvl)
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Accept-Encoding") == "gzip" {
-			w.Header().Set("Content-Encoding", "gzip")
-			gzipw := getzipwriter(w, lvl)
-			defer putzipwriter(gzipw, lvl)
-			h.ServeHTTP(&gzipWriter{rw: w, gzipw: gzipw}, r)
+		acceptEncoding := r.Header.Values("Accept-Encoding")
+		i := hasGzipAt(acceptEncoding)
+		if i == -1 {
+			// we didn't find a gzip encoding, so we can skip the rest of this middleware.
+			h.ServeHTTP(w, r)
+			return
 		}
+		// remove 'accept-encoding: gzip' from the header: we don't want something later down the line to do it again.
+		r.Header["Accept-Encoding"] = append(acceptEncoding[:i], acceptEncoding[i+1:]...)
+		w.Header().Add("Content-Encoding", "gzip")
+		// replace the response writer with a streaming, compressing writer.
+		gzipw := getzipwriter(w, lvl)
+		defer putzipwriter(gzipw, lvl)
+		h.ServeHTTP(&gzipWriter{rw: w, gzipw: gzipw}, r)
 	}
 }
 

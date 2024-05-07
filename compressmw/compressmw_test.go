@@ -46,6 +46,7 @@ func TestGinAcceptGzip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	req.Header.Set("Content-Encoding", "gzip")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -134,52 +135,75 @@ func testGinGzipBodies(t *testing.T, lvl int) {
 	const want = "<this is the body>"
 	s := httptest.NewServer(router)
 	t.Cleanup(s.Close)
-	req, err := http.NewRequest("POST", s.URL+"/foo", strings.NewReader(want))
-	if err != nil {
-		t.Fatal(err)
+	t.Run("no-op", func(t *testing.T) {
+		r, err := http.NewRequest("POST", s.URL+"/foo", strings.NewReader(want))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("got status %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+	})
+
+	for _, headers := range [][]string{
+		{"gzip", "something else"},
+		{"0", "1", "br, x-gzip"},
+		{"gzip, br"},
+	} {
+		t.Run(fmt.Sprintf("headers=%v", headers), func(t *testing.T) {
+			req, err := http.NewRequest("POST", s.URL+"/foo", strings.NewReader(want))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Accept-Encoding", "gzip")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("got status %d, want %d", resp.StatusCode, http.StatusOK)
+			}
+			if resp.Header.Get("Content-Encoding") != "gzip" {
+				t.Errorf("got Content-Encoding %q, want %q", resp.Header.Get("Content-Encoding"), "gzip")
+			}
+			b, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(b) == want {
+				t.Fatalf("already decompressed: got %q, want %q", b, want)
+			}
+			// now, decompress it ourselves
+			reader, err := gzip.NewReader(bytes.NewReader(b))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			got, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+			// show that it gets transparently decompressed if we don't explicitly ask for compression
+			req, err = http.NewRequest("POST", s.URL+"/foo", strings.NewReader(want))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err = http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+		})
 	}
-	req.Header.Set("Accept-Encoding", "gzip")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("got status %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-	if resp.Header.Get("Content-Encoding") != "gzip" {
-		t.Errorf("got Content-Encoding %q, want %q", resp.Header.Get("Content-Encoding"), "gzip")
-	}
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(b) == want {
-		t.Fatalf("already decompressed: got %q, want %q", b, want)
-	}
-	// now, decompress it ourselves
-	reader, err := gzip.NewReader(bytes.NewReader(b))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reader.Close()
-	got, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-	// show that it gets transparently decompressed if we don't explicitly ask for compression
-	req, err = http.NewRequest("POST", s.URL+"/foo", strings.NewReader(want))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
 }
 
 // implementation of TestGzipRoundTrip per-level

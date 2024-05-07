@@ -11,6 +11,7 @@ type roundtripfunc func(*http.Request) (*http.Response, error)
 
 func (rt roundtripfunc) RoundTrip(r *http.Request) (*http.Response, error) { return rt(r) }
 
+
 // ClientGzipBody is a RoundTripper that compresses non-nil request bodies with gzip. Level is in the range 1(gzip.BestSpeed) to 9(gzip.BestCompression). 0 or -1 default to 6.
 func ClientGzipBody(rt http.RoundTripper, level int) http.RoundTripper {
 	level = checkgziplevel(level)

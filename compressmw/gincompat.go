@@ -11,37 +11,42 @@ import (
 )
 
 func GinAcceptGzip(c *gin.Context) {
-	switch c.Request.Header.Get("Content-Encoding") {
-	default:
-		c.Next()
-		return
-	case "gzip", "x-gzip":
-		c.Request.Header.Del("Content-Encoding")
-		defer c.Request.Body.Close()
-		zipreader := getzipreader(c.Request.Body)
-		defer putzipreader(zipreader)
-		c.Request.Body = zipreader
-		c.Next()
+	i := hasGzipAt(c.Request.Header.Values("Content-Encoding"))
+	if i == -1 {
+		c.Next() // we didn't find a gzip encoding, so we can skip the rest of this middleware.
 		return
 	}
+	// remove the gzip encoding from the header.
+	c.Request.Header["Content-Encoding"] = append(c.Request.Header["Content-Encoding"][:i], c.Request.Header["Content-Encoding"][i+1:]...)
+	defer c.Request.Body.Close()
+
+	// replace the request body with a streaming, decompressing reader.
+	zipreader := getzipreader(c.Request.Body)
+	defer putzipreader(zipreader)
+	c.Request.Body = zipreader
+	c.Next()
 }
 
 // GinGzipBodies is a gin.HandlerFunc that compresses the response body with gzip if the client accepts it. Level is in the range 1(gzip.BestSpeed) to 9(gzip.BestCompression). 0 or -1 default to 6.
 func GinGzipBodies(lvl int) gin.HandlerFunc {
 	lvl = checkgziplevel(lvl)
 	return func(c *gin.Context) {
-		switch c.Request.Header.Get("Accept-Encoding") {
-		default:
-			c.Next()
-			return
-		case "gzip", "x-gzip":
-			c.Writer.Header().Set("Content-Encoding", "gzip")
-			zipwriter := getzipwriter(c.Writer, lvl)
-			defer putzipwriter(zipwriter, lvl)
-			c.Writer = &ginCompatGzipWriter{c.Writer, gzipWriter{rw: c.Writer, gzipw: zipwriter}}
+		i := hasGzipAt(c.Request.Header.Values("Accept-Encoding"))
+		if i == -1 {
+			// we didn't find a gzip encoding, so we can skip the rest of this middleware.
 			c.Next()
 			return
 		}
+
+		// remove 'accept-encoding: gzip' from the header: we don't want something later down the line to do it again.
+		c.Request.Header["Accept-Encoding"] = append(c.Request.Header["Accept-Encoding"][:i], c.Request.Header["Accept-Encoding"][i+1:]...)
+		// set the response header to indicate we're sending gzip.
+		// then replace the response writer with a streaming, compressing writer.
+		c.Writer.Header().Set("Content-Encoding", "gzip")
+		zipwriter := getzipwriter(c.Writer, lvl)
+		defer putzipwriter(zipwriter, lvl)
+		c.Writer = &ginCompatGzipWriter{c.Writer, gzipWriter{rw: c.Writer, gzipw: zipwriter}}
+		c.Next()
 	}
 }
 
