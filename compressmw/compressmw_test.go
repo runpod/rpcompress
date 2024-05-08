@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andybalholm/brotli"
 	"github.com/gin-gonic/gin"
 	"github.com/runpod/rpcompress/compressmw"
 )
@@ -125,6 +126,61 @@ func TestServerAccept(t *testing.T) {
 	}
 }
 
+func TestGinGzipOrBrotliBodies(t *testing.T) {
+	for _, tt := range []struct {
+		encoding string
+		read     func(io.Reader) (string, error)
+	}{
+		{
+			encoding: "gzip",
+			read: func(r io.Reader) (string, error) {
+				gzipR, err := gzip.NewReader(r)
+				if err != nil {
+					return "", err
+				}
+				b, err := io.ReadAll(gzipR)
+				return string(b), err
+			},
+		},
+		{
+			encoding: "br",
+			read: func(r io.Reader) (string, error) {
+				b, err := io.ReadAll(brotli.NewReader(r))
+				return string(b), err
+			},
+		},
+	} {
+		t.Run(tt.encoding, func(t *testing.T) {
+			const wantBody = "<this is the body>"
+			req, err := http.NewRequest("POST", "/foo", strings.NewReader(wantBody))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// say we can accept brotli
+			req.Header.Set("Accept-Encoding", tt.encoding)
+
+			router := gin.New()
+			router.Use(compressmw.GinGzipOrBrotliBodies) // set up the router to use the middleware when it sees "br" in the Accept-Encoding header
+			router.POST("/foo", func(c *gin.Context) {
+				io.Copy(c.Writer, c.Request.Body)
+			})
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("got status %d, want %d", rec.Code, http.StatusOK)
+			}
+			if rec.Header().Get("Content-Encoding") != tt.encoding {
+				t.Errorf("got Content-Encoding %q, want %q", rec.Header().Get("Content-Encoding"), "br")
+			}
+			if got, err := tt.read(rec.Body); err != nil {
+				t.Errorf("error reading response body: %v", err)
+			} else if got != wantBody {
+				t.Errorf("got %q, want %q", got, wantBody)
+			}
+		})
+	}
+}
+
 // implementation of TestGinGzipBodies per-level
 func testGinGzipBodies(t *testing.T, lvl int) {
 	router := gin.New()
@@ -212,7 +268,7 @@ func testGzipRoundTrip(t *testing.T, lvl int) {
 	const want = "<this is the body>"
 	s := httptest.NewServer(handler)
 	t.Cleanup(s.Close)
-	client := &http.Client{Transport: compressmw.ClientGzipBody(http.DefaultTransport, gzip.DefaultCompression)}
+	client := &http.Client{Transport: compressmw.ClientGzipBody(http.DefaultTransport, lvl)}
 	req, err := http.NewRequest("POST", s.URL+"/foo", strings.NewReader(want))
 	if err != nil {
 		t.Fatal(err)
