@@ -4,9 +4,11 @@ package compressmw
 
 import (
 	"bufio"
+	"io"
 	"net"
 	"net/http"
 
+	"github.com/andybalholm/brotli"
 	"github.com/gin-gonic/gin"
 )
 
@@ -24,6 +26,15 @@ func GinAcceptGzip(c *gin.Context) {
 	zipreader := getzipreader(c.Request.Body)
 	defer putzipreader(zipreader)
 	c.Request.Body = zipreader
+	c.Next()
+}
+
+// GinGzipOrBrotliBodies is a gin.HandlerFunc that sniffs the client's Accept-Encoding header for 'br', 'gzip', or 'x-gzip',
+// and compresses the response body with brotli or gzip, respectively, setting the response's Content-Encoding header accordingly.
+func GinGzipOrBrotliBodies(c *gin.Context) {
+	wc := brotli.HTTPCompressor(c.Writer, c.Request)
+	defer wc.Close()
+	c.Writer = &ginCompatGzipOrBrotliWriter{ginResponseWriter: c.Writer, compressWriter: wc}
 	c.Next()
 }
 
@@ -48,6 +59,53 @@ func GinGzipBodies(lvl int) gin.HandlerFunc {
 		c.Writer = &ginCompatGzipWriter{c.Writer, gzipWriter{rw: c.Writer, gzipw: zipwriter}}
 		c.Next()
 	}
+}
+
+type ginCompatGzipOrBrotliWriter struct {
+	ginResponseWriter gin.ResponseWriter
+	compressWriter    io.WriteCloser
+	status            int
+}
+
+var _ gin.ResponseWriter = (*ginCompatGzipOrBrotliWriter)(nil)
+
+func (g *ginCompatGzipOrBrotliWriter) Flush()              { g.ginResponseWriter.Flush() }
+func (g *ginCompatGzipOrBrotliWriter) Pusher() http.Pusher { return g.ginResponseWriter.Pusher() }
+func (g *ginCompatGzipOrBrotliWriter) Header() http.Header { return g.ginResponseWriter.Header() }
+func (g *ginCompatGzipOrBrotliWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return g.ginResponseWriter.Hijack()
+}
+
+func (g *ginCompatGzipOrBrotliWriter) Status() int {
+	if g.status != 0 {
+		return g.status
+	}
+	return g.ginResponseWriter.Status()
+}
+func (g *ginCompatGzipOrBrotliWriter) WriteString(s string) (int, error) { return g.Write([]byte(s)) }
+func (g *ginCompatGzipOrBrotliWriter) Written() bool                     { return g.ginResponseWriter.Written() }
+func (g *ginCompatGzipOrBrotliWriter) Size() int                         { return g.ginResponseWriter.Size() }
+func (g *ginCompatGzipOrBrotliWriter) CloseNotify() <-chan bool {
+	return g.ginResponseWriter.CloseNotify()
+}
+
+func (g *ginCompatGzipOrBrotliWriter) WriteHeader(code int) {
+	g.status = code
+	g.ginResponseWriter.WriteHeader(code)
+}
+
+func (g *ginCompatGzipOrBrotliWriter) WriteHeaderNow() {
+	if g.status == 0 {
+		g.status = http.StatusOK
+	}
+	g.ginResponseWriter.WriteHeader(g.status)
+}
+
+func (g *ginCompatGzipOrBrotliWriter) Write(data []byte) (int, error) {
+	if g.status == 0 {
+		g.status = http.StatusOK
+	}
+	return g.compressWriter.Write(data)
 }
 
 // ginCompatGzipWriter implements all 10 billion methods of gin.ResponseWriter
