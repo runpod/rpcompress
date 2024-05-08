@@ -12,10 +12,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func GinBrotliOrGzip(c *gin.Context) {
-	brotli.HTTPCompressor(c.Writer, c.Request)
-}
-
 func GinAcceptGzip(c *gin.Context) {
 	i := hasGzipAt(c.Request.Header.Values("Content-Encoding"))
 	if i == -1 {
@@ -33,6 +29,8 @@ func GinAcceptGzip(c *gin.Context) {
 	c.Next()
 }
 
+// GinGzipOrBrotliBodies is a gin.HandlerFunc that sniffs the client's Accept-Encoding header for 'br', 'gzip', or 'x-gzip',
+// and compresses the response body with brotli or gzip, respectively, setting the response's Content-Encoding header accordingly.
 func GinGzipOrBrotliBodies(c *gin.Context) {
 	wc := brotli.HTTPCompressor(c.Writer, c.Request)
 	defer wc.Close()
